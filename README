@@ -7,5 +7,5 @@ Basic workspace management service for Konflux
 The build require golang 1.20
 
 ```bash
-go build .
+make build
 ```
