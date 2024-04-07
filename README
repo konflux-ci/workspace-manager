@@ -1,0 +1,11 @@
+# Workspace Manager
+
+Basic workspace management service for Konflux
+
+## Build
+
+The build require golang 1.20
+
+```bash
+go build .
+```
