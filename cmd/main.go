@@ -1,12 +1,20 @@
 package main
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	core "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 
 	crt "github.com/codeready-toolchain/api/api/v1alpha1"
 )
@@ -22,6 +30,14 @@ type SignupStatus struct {
 
 type Signup struct {
 	SignupStatus SignupStatus `json:"status"`
+}
+
+var (
+	scheme = runtime.NewScheme()
+)
+
+func init() {
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 }
 
 func main() {
@@ -47,53 +63,57 @@ func main() {
 		return c.JSON(http.StatusOK, resp)
 	})
 
+	cfg, err := config.GetConfig()
+	if err != nil {
+		e.Logger.Fatal(err)
+	}
+
+	cl, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		e.Logger.Fatal(err)
+	}
+	namespaceList := &core.NamespaceList{}
+	err = cl.List(
+		context.Background(),
+		namespaceList,
+	)
+	if err != nil {
+		e.Logger.Fatal(err)
+	}
+
 	gv := crt.GroupVersion.String()
+
+	var wss []crt.Workspace
+
+	for _, ns := range namespaceList.Items {
+		ws := crt.Workspace{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "Workspace",
+				APIVersion: gv,
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: ns.Name,
+			},
+			Status: crt.WorkspaceStatus{
+				Namespaces: []crt.SpaceNamespace{
+					{
+						Name: ns.Name,
+						Type: "default",
+					},
+				},
+				// Owner: "user1",
+				// Role:  "admin",
+			},
+		}
+		wss = append(wss, ws)
+	}
 
 	workspaces := crt.WorkspaceList{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "WorkspaceList",
 			APIVersion: gv,
 		},
-		Items: []crt.Workspace{
-			{
-				TypeMeta: metav1.TypeMeta{
-					Kind:       "Workspace",
-					APIVersion: gv,
-				},
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "user-ns1",
-				},
-				Status: crt.WorkspaceStatus{
-					Namespaces: []crt.SpaceNamespace{
-						{
-							Name: "user-ns1",
-							Type: "default",
-						},
-					},
-					Owner: "user1",
-					Role:  "admin",
-				},
-			},
-			{
-				TypeMeta: metav1.TypeMeta{
-					Kind:       "Workspace",
-					APIVersion: gv,
-				},
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "user-ns2",
-				},
-				Status: crt.WorkspaceStatus{
-					Namespaces: []crt.SpaceNamespace{
-						{
-							Name: "user-ns2",
-							Type: "default",
-						},
-					},
-					Owner: "user1",
-					Role:  "admin",
-				},
-			},
-		},
+		Items: wss,
 	}
 
 	e.GET("/workspaces", func(c echo.Context) error {
