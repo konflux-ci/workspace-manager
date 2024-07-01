@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9/go-toolset:1.20.10-2.1699551725 as builder
+FROM registry.access.redhat.com/ubi9/go-toolset:1.21.10-1.1719562237 as builder
 
 WORKDIR /opt/app-root/src
 # Copy the Go Modules manifests
