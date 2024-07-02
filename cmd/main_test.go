@@ -12,6 +12,7 @@ import (
 	k8sapi "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 
 	"context"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
 
@@ -39,7 +41,7 @@ type HTTPheader struct {
 var k8sClient client.Client
 var testEnv *envtest.Environment
 
-func createRole(k8sClient client.Client, nsName string, roleName string) {
+func createRole(k8sClient client.Client, nsName string, roleName string, verbs []string) {
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      roleName,
@@ -49,7 +51,7 @@ func createRole(k8sClient client.Client, nsName string, roleName string) {
 			{
 				APIGroups: []string{"appstudio.redhat.com"},
 				Resources: []string{"applications", "components"},
-				Verbs:     []string{"create", "list", "watch", "delete"},
+				Verbs:     verbs,
 			},
 		},
 	}
@@ -249,8 +251,8 @@ var _ = BeforeSuite(func() {
 	createNamespace(k8sClient, "test-tenant")
 	createNamespace(k8sClient, "test-tenant-2")
 	createNamespace(k8sClient, "test-tenant-3")
-	createRole(k8sClient, "test-tenant", "namespace-access")
-	createRole(k8sClient, "test-tenant-2", "namespace-access-2")
+	createRole(k8sClient, "test-tenant", "namespace-access", []string{"create", "list", "watch", "delete"})
+	createRole(k8sClient, "test-tenant-2", "namespace-access-2", []string{"create", "list", "watch", "delete"})
 	createRoleBinding(k8sClient, "namespace-access-user-binding", "test-tenant", user1, "namespace-access")
 	createRoleBinding(k8sClient, "namespace-access-user-binding-2", "test-tenant", user2, "namespace-access")
 	createRoleBinding(k8sClient, "namespace-access-user-binding-3", "test-tenant-2", user2, "namespace-access-2")
@@ -267,3 +269,35 @@ var _ = AfterSuite(func() {
 		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error killing the server during test teardown: %v", err))
 	}
 })
+
+var _ = DescribeTable("TestRunAccessCheck", func(user string, namespace string, resource string, verb string, expectedResult bool) {
+	cfg, _ := config.GetConfig()
+	clientset, _ := kubernetes.NewForConfig(cfg)
+	authCl := clientset.AuthorizationV1()
+
+	boolresult, err := runAccessCheck(authCl, user, namespace, "appstudio.redhat.com", resource, verb)
+	Expect(boolresult).To(Equal(expectedResult))
+	Expect(err).NotTo(HaveOccurred(), "Unexpected error testing RunAccessCheck")
+},
+	Entry(
+		"A user that has access to the resource should return true (user2 has permission to 'create' on test-tenant-1)",
+		"user2@konflux.dev",
+		"test-tenant",
+		"applications",
+		"create",
+		true),
+	Entry(
+		"A user that does not have any premissions on the namespace should return false (user1 doesn't have access to test-tenant-2)",
+		"user1@konflux.dev",
+		"test-tenant-2",
+		"applications",
+		"create",
+		false),
+	Entry(
+		"A user that does not have the permissions to perform the specific action on the namespace should return false (user1 doesn't have permission to 'patch' on test-tenant-1)",
+		"user1@konflux.dev",
+		"test-tenant-1",
+		"applications",
+		"patch",
+		false),
+)

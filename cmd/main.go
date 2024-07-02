@@ -115,7 +115,6 @@ func getNamespacesWithAccess(
 		for _, verb := range []string{"create", "list", "watch", "delete"} {
 			for _, resource := range []string{"applications", "components"} {
 				allowed, err := runAccessCheck(
-					e,
 					authCl,
 					c.Request().Header["X-Email"][0],
 					ns.Name,
@@ -169,7 +168,6 @@ func getUserNamespaces(e *echo.Echo, nameReq labels.Requirement) ([]core.Namespa
 
 // check if a user can perform a specific verb on a specific resource in namespace
 func runAccessCheck(
-	e *echo.Echo,
 	authCl authorizationv1Client.AuthorizationV1Interface,
 	user string,
 	namespace string,
