@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"context"
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -38,6 +39,12 @@ type HTTPResponse struct {
 type HTTPheader struct {
 	name  string
 	value string
+}
+
+type NamespaceRoleBinding struct {
+	Namespace      string
+	Role           string
+	RoleBinding    string
 }
 
 var k8sClient client.Client
@@ -101,24 +108,33 @@ func createNamespace(k8sClient client.Client, name string) (k8sapi.Namespace, er
 }
 
 func deleteRole(k8sClient client.Client, nsName string, roleName string) {
-	role := &rbacv1.Role{}
-	role.Name = roleName
-	role.Namespace = nsName
+	role := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      roleName,
+			Namespace: nsName,
+		},
+	}
 	err := k8sClient.Delete(context.Background(), role)
 	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error deleting the role %s in namespace %s: %v\n", roleName, nsName, err))
 }
 
 func deleteRoleBinding(k8sClient client.Client, nsName string, roleBindingName string) {
-	roleBinding := &rbacv1.RoleBinding{}
-	roleBinding.Name = roleBindingName
-	roleBinding.Namespace = nsName
+	roleBinding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      roleBindingName,
+			Namespace: nsName,
+		},
+	}
 	err := k8sClient.Delete(context.Background(), roleBinding)
 	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error deleting the role binding %s in namespace %s: %v\n", roleBindingName, nsName, err))
 }
 
 func deleteNamespace(k8sClient client.Client, nsName string) {
-	ns := &k8sapi.Namespace{}
-	ns.Name = nsName
+	ns := &k8sapi.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: nsName,
+		},
+	}
 	err := k8sClient.Delete(context.Background(), ns)
 	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error deleting the namespace: %s: %v\n", nsName, err))
 }
@@ -472,6 +488,129 @@ var _ = DescribeTable("GetWorkspacesWithAccess querying for workspaces with acce
 			deleteRole(k8sClient, "ws-test-tenant-1", "ws-namespace-access-1")
 			for _, name := range namespaceNames {
 				deleteNamespace(k8sClient, name)
+			}
+		})
+	})
+})
+
+var _ = DescribeTable("TestGetNamespacesWithAccess", func(allNamespaces []k8sapi.Namespace,
+	expectedNs []k8sapi.Namespace, actualNs []k8sapi.Namespace, err error) {
+	e := echo.New()
+	cfg, _ := config.GetConfig()
+	clientset, _ := kubernetes.NewForConfig(cfg)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Request().Header.Set("X-Email", "user1@konflux.dev")
+	authCl := clientset.AuthorizationV1()
+	
+	JustBeforeEach(func() {
+		actualNs, err = getNamespacesWithAccess(e, c, authCl, allNamespaces)
+	})
+
+	Context("When all the namespaces have all the necessary permissions like create, list, watch and delete", func() {
+		mappings := []NamespaceRoleBinding{
+			{
+				Namespace:   "ns-test-tenant-1",
+				Role:        "ns-namespace-access-1",
+				RoleBinding: "ns-namespace-access-user-binding-1",
+			},
+			{
+				Namespace:   "ns-test-tenant-2",
+				Role:        "ns-namespace-access-2",
+				RoleBinding: "ns-namespace-access-user-binding-2",
+			},
+		}
+		BeforeEach(func() {
+			for _, name := range mappings {
+				ns, err := createNamespace(k8sClient, name.Namespace)
+				Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error while creating the namespace %s: %v", name.Namespace, err))
+				allNamespaces = append(allNamespaces, ns)
+				createRole(k8sClient, name.Namespace, name.Role, []string{"create", "list", "watch", "delete"})
+				createRoleBinding(k8sClient, name.RoleBinding, name.Namespace, "user1@konflux.dev", name.Role)
+			}			
+			expectedNs = allNamespaces
+		})
+		It("returns all namespaces in the list", func() {
+			Expect(actualNs).To(Equal(expectedNs))
+			Expect(err).NotTo(HaveOccurred(), "Unexpected error testing GetNamespacesWithAccess")
+		})
+		AfterEach(func() {
+			for _, name := range mappings {
+				deleteRoleBinding(k8sClient, name.Namespace, name.RoleBinding)
+				deleteRole(k8sClient, name.Namespace, name.Role)
+				deleteNamespace(k8sClient, name.Namespace)
+			}
+		})
+	})
+
+	Context("When namspace ns3 doesn't have necessary permissions", func() {
+		BeforeEach(func() {
+			var ns3 k8sapi.Namespace
+			ns3, err = createNamespace(k8sClient, "ns-test-tenant-3")
+			Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error while creating the namespace ns3: %v", err))
+			allNamespaces = []k8sapi.Namespace{ns3}
+			expectedNs = []k8sapi.Namespace{}
+		})
+		It("doesn't return any namespace", func() {
+			Expect(actualNs).To(Equal(expectedNs))
+			Expect(err).NotTo(HaveOccurred(), "Unexpected error testing GetNamespacesWithAccess")
+		})
+		AfterEach(func() {
+			deleteNamespace(k8sClient, "ns-test-tenant-3")
+		})
+	})
+
+	Context("When only namespaces ns-test-tenant-1 and ns-test-tenant-2 has all necessary permissions and other's don't", func() {
+		mappings := []NamespaceRoleBinding{
+			{
+				Namespace:   "ns-test-tenant-1",
+				Role:        "ns-namespace-access-1",
+				RoleBinding: "ns-namespace-access-user-binding-1",
+			},
+			{
+				Namespace:   "ns-test-tenant-2",
+				Role:        "ns-namespace-access-2",
+				RoleBinding: "ns-namespace-access-user-binding-2",
+			},
+			{
+				Namespace:   "ns-test-tenant-3",
+				Role:        "ns-namespace-access-3",
+				RoleBinding: "ns-namespace-access-user-binding-3",
+			},
+			{
+				Namespace:   "ns-test-tenant-4",
+				Role:        "",
+				RoleBinding: "",
+			},
+		}
+		BeforeEach(func() {
+			for _, name := range mappings {
+				ns, err := createNamespace(k8sClient, name.Namespace)
+				Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error while creating the namespace %s: %v", name.Namespace, err))
+				allNamespaces = append(allNamespaces, ns)
+			}
+			createRole(k8sClient, "ns-test-tenant-1", "ns-namespace-access-1", []string{"create", "list", "watch", "delete"})
+			createRole(k8sClient, "ns-test-tenant-2", "ns-namespace-access-2", []string{"create", "list", "watch", "delete"})
+			createRole(k8sClient, "ns-test-tenant-3", "ns-namespace-access-3", []string{"create", "list", "watch"})
+			createRoleBinding(k8sClient, "ns-namespace-access-user-binding-1", "ns-test-tenant-1", "user1@konflux.dev", "ns-namespace-access-1")
+			createRoleBinding(k8sClient, "ns-namespace-access-user-binding-2", "ns-test-tenant-2", "user2@konflux.dev", "ns-namespace-access-2")
+			createRoleBinding(k8sClient, "ns-namespace-access-user-binding-3", "ns-test-tenant-3", "user3@konflux.dev", "ns-namespace-access-3")
+			expectedNs = append(expectedNs, allNamespaces[0], allNamespaces[1])
+		})
+		It("returns only namespaces test-tenant and test-tenant-2", func() {
+			Expect(actualNs).To(Equal(expectedNs))
+			Expect(err).NotTo(HaveOccurred(), "Unexpected error testing GetNamespacesWithAccess")
+		})
+		AfterEach(func() {
+			deleteRoleBinding(k8sClient, "ns-test-tenant-1", "ns-namespace-access-user-binding-1")
+			deleteRoleBinding(k8sClient, "ns-test-tenant-2", "ns-namespace-access-user-binding-2")
+			deleteRoleBinding(k8sClient, "ns-test-tenant-3", "ns-namespace-access-user-binding-3")
+			deleteRole(k8sClient, "ns-test-tenant-1", "ns-namespace-access-1")
+			deleteRole(k8sClient, "ns-test-tenant-2", "ns-namespace-access-2")
+			deleteRole(k8sClient, "ns-test-tenant-3", "ns-namespace-access-3")
+			for _, name := range mappings {
+				deleteNamespace(k8sClient, name.Namespace)
 			}
 		})
 	})
