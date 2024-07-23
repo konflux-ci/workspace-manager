@@ -13,6 +13,8 @@ import (
 	k8sapi "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/client-go/kubernetes"
 
 	"context"
@@ -42,9 +44,9 @@ type HTTPheader struct {
 }
 
 type NamespaceRoleBinding struct {
-	Namespace      string
-	Role           string
-	RoleBinding    string
+	Namespace   string
+	Role        string
+	RoleBinding string
 }
 
 var k8sClient client.Client
@@ -362,7 +364,7 @@ var _ = DescribeTable("GetWorkspacesWithAccess querying for workspaces with acce
 				allNamespaces = append(allNamespaces, ns)
 				createRole(k8sClient, name, roleNames[i], []string{"create", "list", "watch", "delete"})
 				createRoleBinding(k8sClient, roleBindings[i], name, "user1@konflux.dev", roleNames[i])
-			}			
+			}
 			expectedWorkspaces = []crt.Workspace{
 				{
 					TypeMeta: metav1.TypeMeta{
@@ -424,7 +426,7 @@ var _ = DescribeTable("GetWorkspacesWithAccess querying for workspaces with acce
 				ns, err := createNamespace(k8sClient, name)
 				Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error while creating the namespace %s: %v", name, err))
 				allNamespaces = append(allNamespaces, ns)
-			}			
+			}
 			createRole(k8sClient, "ws-test-tenant-1", "ws-namespace-access-1", []string{"create", "list", "watch", "delete"})
 			createRoleBinding(k8sClient, "ws-namespace-access-user-binding-1", "ws-test-tenant-1", "user1@konflux.dev", "ws-namespace-access-1")
 			expectedWorkspaces = []crt.Workspace{
@@ -461,7 +463,7 @@ var _ = DescribeTable("GetWorkspacesWithAccess querying for workspaces with acce
 				deleteNamespace(k8sClient, name)
 			}
 		})
-	})	
+	})
 
 	Context("When no workspaces has all the necessary permissions", func() {
 		namespaceNames := []string{"ws-test-tenant-1", "ws-test-tenant-2"}
@@ -503,7 +505,7 @@ var _ = DescribeTable("TestGetNamespacesWithAccess", func(allNamespaces []k8sapi
 	c := e.NewContext(req, rec)
 	c.Request().Header.Set("X-Email", "user1@konflux.dev")
 	authCl := clientset.AuthorizationV1()
-	
+
 	JustBeforeEach(func() {
 		actualNs, err = getNamespacesWithAccess(e, c, authCl, allNamespaces)
 	})
@@ -528,7 +530,7 @@ var _ = DescribeTable("TestGetNamespacesWithAccess", func(allNamespaces []k8sapi
 				allNamespaces = append(allNamespaces, ns)
 				createRole(k8sClient, name.Namespace, name.Role, []string{"create", "list", "watch", "delete"})
 				createRoleBinding(k8sClient, name.RoleBinding, name.Namespace, "user1@konflux.dev", name.Role)
-			}			
+			}
 			expectedNs = allNamespaces
 		})
 		It("returns all namespaces in the list", func() {
@@ -611,6 +613,105 @@ var _ = DescribeTable("TestGetNamespacesWithAccess", func(allNamespaces []k8sapi
 			deleteRole(k8sClient, "ns-test-tenant-3", "ns-namespace-access-3")
 			for _, name := range mappings {
 				deleteNamespace(k8sClient, name.Namespace)
+			}
+		})
+	})
+})
+
+var _ = Describe("GetUserNamespaces", func() {
+	var e *echo.Echo
+	var createdNamespaces []string
+
+	// checks if all created namespaces are in the returned list
+	Context("When querying for all user namespaces using Exists", func() {
+		It("Should return all created namespaces", func() {
+			namesToCreate := []string{"test-ns-1", "test-ns-2", "test-ns-3"}
+			for _, name := range namesToCreate {
+				ns, err := createNamespace(k8sClient, name)
+				Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error creating the namespace %s", name))
+				createdNamespaces = append(createdNamespaces, ns.Name)
+			}
+
+			req, err := labels.NewRequirement("kubernetes.io/metadata.name", selection.Exists, []string{})
+			Expect(err).NotTo(HaveOccurred(), "Error creating label requirement")
+
+			namespaces, err := getUserNamespaces(e, *req)
+			Expect(err).NotTo(HaveOccurred(), "Error getting user namespaces")
+
+			var actualNamespaces []string
+			for _, ns := range namespaces {
+				actualNamespaces = append(actualNamespaces, ns.Name)
+			}
+
+			for _, createdNs := range createdNamespaces {
+				Expect(actualNamespaces).To(ContainElement(createdNs))
+			}
+		})
+
+		AfterEach(func() {
+			for _, ns := range createdNamespaces {
+				deleteNamespace(k8sClient, ns)
+			}
+			createdNamespaces = nil
+		})
+	})
+	// checks if specific namespaces are in the returned list
+	Context("When querying for specific namespaces using In", func() {
+		It("Should return only the specified namespaces", func() {
+			for _, name := range []string{"in-test-1", "in-test-2", "not-in-test"} {
+				ns, err := createNamespace(k8sClient, name)
+				Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error creating the namespace %s", name))
+				createdNamespaces = append(createdNamespaces, ns.Name)
+			}
+
+			req, err := labels.NewRequirement("kubernetes.io/metadata.name", selection.In, []string{"in-test-1", "in-test-2"})
+			Expect(err).NotTo(HaveOccurred(), "Error creating label requirement")
+
+			namespaces, err := getUserNamespaces(e, *req)
+			Expect(err).NotTo(HaveOccurred(), "Error getting user namespaces")
+
+			var actualNamespaces []string
+			for _, ns := range namespaces {
+				actualNamespaces = append(actualNamespaces, ns.Name)
+			}
+
+			Expect(actualNamespaces).To(ConsistOf("in-test-1", "in-test-2"))
+			Expect(actualNamespaces).NotTo(ContainElement("not-in-test"))
+		})
+
+		AfterEach(func() {
+			for _, ns := range createdNamespaces {
+				deleteNamespace(k8sClient, ns)
+			}
+		})
+	})
+
+	Context("When querying for namespaces using NotIn", func() {
+		It("Should return namespaces not in the specified list", func() {
+			for _, name := range []string{"ts-keep-1", "ts-keep-2", "ts-exclude-1", "ts-exclude-2"} {
+				ns, err := createNamespace(k8sClient, name)
+				Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error creating the namespace %s", name))
+				createdNamespaces = append(createdNamespaces, ns.Name)
+			}
+
+			req, err := labels.NewRequirement("kubernetes.io/metadata.name", selection.NotIn, []string{"ts-exclude-1", "ts-exclude-2"})
+			Expect(err).NotTo(HaveOccurred(), "Error creating label requirement")
+
+			namespaces, err := getUserNamespaces(e, *req)
+			Expect(err).NotTo(HaveOccurred(), "Error getting user namespaces")
+
+			var actualNamespaces []string
+			for _, ns := range namespaces {
+				actualNamespaces = append(actualNamespaces, ns.Name)
+			}
+
+			Expect(actualNamespaces).To(ContainElements("ts-keep-1", "ts-keep-2"))
+			Expect(actualNamespaces).NotTo(ContainElements("ts-exclude-1", "ts-exclude-2"))
+		})
+
+		AfterEach(func() {
+			for _, ns := range createdNamespaces {
+				deleteNamespace(k8sClient, ns)
 			}
 		})
 	})
