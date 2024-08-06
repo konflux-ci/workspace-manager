@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/labstack/gommon/log"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	core "k8s.io/api/core/v1"
 	authorizationv1Client "k8s.io/client-go/kubernetes/typed/authorization/v1"
@@ -24,6 +27,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	dummysignup "github.com/konflux-ci/workspace-manager/pkg/handlers/signup/dummy"
+
+	provisioner "github.com/konflux-ci/workspace-manager/pkg/handlers/signup/provisioner"
 )
 
 var (
@@ -149,6 +154,7 @@ func getUserNamespaces(e *echo.Echo, nameReq labels.Requirement) ([]core.Namespa
 		namespaceList,
 		&client.ListOptions{LabelSelector: selector},
 	)
+
 	if err != nil {
 		return nil, err
 	}
@@ -190,8 +196,32 @@ func runAccessCheck(
 	return false, nil
 }
 
+func getClientOrDie(logger echo.Logger) client.Client {
+	cfg, err := config.GetConfig()
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	cl, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	return cl
+}
+
+func getHTTPPort() string {
+	port := "5000"
+	if val, ok := os.LookupEnv("WM_HTTP_PORT"); ok {
+		port = val
+	}
+
+	return fmt.Sprintf(":%s", port)
+}
+
 func main() {
 	e := echo.New()
+	e.Logger.SetLevel(log.INFO)
 
 	e.Pre(middleware.RemoveTrailingSlash())
 
@@ -199,9 +229,15 @@ func main() {
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 
-	e.POST("/api/v1/signup", dummysignup.DummySignupPostHandler)
-
-	e.GET("/api/v1/signup", dummysignup.DummySignupGetHandler)
+	if os.Getenv("WM_NS_PROVISION") == "true" {
+		e.Logger.Info("Automatic namespace provisioning is on")
+		nsp := provisioner.NewNSProvisioner(getClientOrDie(e.Logger))
+		e.POST("/api/v1/signup", nsp.CreateNSHandler)
+		e.GET("/api/v1/signup", nsp.CheckNSExistHandler)
+	} else {
+		e.POST("/api/v1/signup", dummysignup.DummySignupPostHandler)
+		e.GET("/api/v1/signup", dummysignup.DummySignupGetHandler)
+	}
 
 	e.GET("/workspaces", func(c echo.Context) error {
 		nameReq, _ := labels.NewRequirement(
@@ -246,5 +282,5 @@ func main() {
 		return c.NoContent(http.StatusOK)
 	})
 
-	e.Logger.Fatal(e.Start(":5000"))
+	e.Logger.Fatal(e.Start(getHTTPPort()))
 }
