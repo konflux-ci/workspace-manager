@@ -12,12 +12,15 @@ import (
 	k8sapi "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/client-go/kubernetes"
 
 	"context"
 	"os"
 	"testing"
 
+	"github.com/labstack/echo/v4"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/client-go/rest"
@@ -300,4 +303,54 @@ var _ = DescribeTable("TestRunAccessCheck", func(user string, namespace string, 
 		"applications",
 		"patch",
 		false),
+)
+
+var _ = DescribeTable("TestGetUserNamespaces",
+	func(labelKey string, labelValues []string, expectedNamespaces []string) {
+		e := echo.New()
+
+		var req *labels.Requirement
+		var err error
+
+		// Create the label requirement based on the input
+		if len(labelValues) > 0 {
+			req, err = labels.NewRequirement(labelKey, selection.In, labelValues)
+		} else {
+			req, err = labels.NewRequirement(labelKey, selection.Exists, []string{})
+		}
+		Expect(err).NotTo(HaveOccurred(), "Error creating label requirement")
+
+		namespaces, err := getUserNamespaces(e, *req)
+		Expect(err).NotTo(HaveOccurred(), "Error getting user namespaces")
+
+		var actualNamespaces []string
+		for _, ns := range namespaces {
+			actualNamespaces = append(actualNamespaces, ns.Name)
+		}
+
+		log.Printf("Expected Namespaces: %v, Actual Namespaces: %v", expectedNamespaces, actualNamespaces)
+
+		// Check if actual namespaces contain all expected namespaces
+		for _, expected := range expectedNamespaces {
+			Expect(actualNamespaces).To(ContainElement(expected))
+		}
+	},
+	Entry(
+		"Get specific user namespace",
+		"kubernetes.io/metadata.name",
+		[]string{"test-tenant"},
+		[]string{"test-tenant"},
+	),
+	Entry(
+		"Get multiple specific user namespaces",
+		"kubernetes.io/metadata.name",
+		[]string{"test-tenant", "test-tenant-2"},
+		[]string{"test-tenant", "test-tenant-2"},
+	),
+	Entry(
+		"Returns an empty string when the label mentions a namespace that does not exist",
+		"kubernetes.io/metadata.name",
+		[]string{"non-existent-namespace"},
+		[]string{},
+	),
 )
