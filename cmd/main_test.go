@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/labstack/echo/v4"
 	k8sapi "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,6 +19,7 @@ import (
 	"os"
 	"testing"
 
+	crt "github.com/codeready-toolchain/api/api/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/client-go/rest"
@@ -82,7 +84,7 @@ func createRoleBinding(k8sClient client.Client, bindingName string, nsName strin
 	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error creating 'roleBinding' resource: %v", err))
 }
 
-func createNamespace(k8sClient client.Client, name string) {
+func createNamespace(k8sClient client.Client, name string) (k8sapi.Namespace, error) {
 	namespaced := &k8sapi.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
@@ -92,8 +94,33 @@ func createNamespace(k8sClient client.Client, name string) {
 			},
 		},
 	}
-	err := k8sClient.Create(context.Background(), namespaced)
-	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error creating 'Namespace' resource: %v", err))
+	if err := k8sClient.Create(context.Background(), namespaced); err != nil {
+		return k8sapi.Namespace{}, fmt.Errorf("Error creating 'Namespace' resource: %v", err)
+	}
+	return *namespaced, nil
+}
+
+func deleteRole(k8sClient client.Client, nsName string, roleName string) {
+	role := &rbacv1.Role{}
+	role.Name = roleName
+	role.Namespace = nsName
+	err := k8sClient.Delete(context.Background(), role)
+	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error deleting the role %s in namespace %s: %v\n", roleName, nsName, err))
+}
+
+func deleteRoleBinding(k8sClient client.Client, nsName string, roleBindingName string) {
+	roleBinding := &rbacv1.RoleBinding{}
+	roleBinding.Name = roleBindingName
+	roleBinding.Namespace = nsName
+	err := k8sClient.Delete(context.Background(), roleBinding)
+	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error deleting the role binding %s in namespace %s: %v\n", roleBindingName, nsName, err))
+}
+
+func deleteNamespace(k8sClient client.Client, nsName string) {
+	ns := &k8sapi.Namespace{}
+	ns.Name = nsName
+	err := k8sClient.Delete(context.Background(), ns)
+	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error deleting the namespace: %s: %v\n", nsName, err))
 }
 
 func performHTTPGetCall(url string, header HTTPheader) (*HTTPResponse, error) {
@@ -248,9 +275,11 @@ var _ = BeforeSuite(func() {
 
 	user1 := "user1@konflux.dev"
 	user2 := "user2@konflux.dev"
-	createNamespace(k8sClient, "test-tenant")
-	createNamespace(k8sClient, "test-tenant-2")
-	createNamespace(k8sClient, "test-tenant-3")
+	namespaceNames := []string{"test-tenant", "test-tenant-2", "test-tenant-3"}
+	for _, name := range namespaceNames {
+		_, err := createNamespace(k8sClient, name)
+		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error while creating the namespace %s: %v", name, err))
+	}
 	createRole(k8sClient, "test-tenant", "namespace-access", []string{"create", "list", "watch", "delete"})
 	createRole(k8sClient, "test-tenant-2", "namespace-access-2", []string{"create", "list", "watch", "delete"})
 	createRoleBinding(k8sClient, "namespace-access-user-binding", "test-tenant", user1, "namespace-access")
@@ -301,3 +330,149 @@ var _ = DescribeTable("TestRunAccessCheck", func(user string, namespace string, 
 		"patch",
 		false),
 )
+
+var _ = DescribeTable("GetWorkspacesWithAccess querying for workspaces with access", func(gv string, allNamespaces []k8sapi.Namespace, expectedWorkspaces []crt.Workspace) {
+	e := echo.New()
+	c := e.NewContext(nil, nil)
+	Context("When workspace test-tenant's namespaces has all the necessary permissions", func() {
+		namespaceNames := []string{"ws-test-tenant-1", "ws-test-tenant-2"}
+		roleNames := []string{"ws-namespace-access-1", "ws-namespace-access-2"}
+		roleBindings := []string{"ws-namespace-access-user-binding-1", "ws-namespace-access-user-binding-2"}
+		BeforeEach(func() {
+			gv = "v1alpha1"
+			for i, name := range namespaceNames {
+				ns, err := createNamespace(k8sClient, name)
+				Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error while creating the namespace %s: %v", name, err))
+				allNamespaces = append(allNamespaces, ns)
+				createRole(k8sClient, name, roleNames[i], []string{"create", "list", "watch", "delete"})
+				createRoleBinding(k8sClient, roleBindings[i], name, "user1@konflux.dev", roleNames[i])
+			}			
+			expectedWorkspaces = []crt.Workspace{
+				{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "Workspace",
+						APIVersion: gv,
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "ws-test-tenant-1",
+					},
+					Status: crt.WorkspaceStatus{
+						Namespaces: []crt.SpaceNamespace{
+							{
+								Name: "ws-test-tenant-1",
+								Type: "default",
+							},
+						},
+					},
+				},
+				{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "Workspace",
+						APIVersion: gv,
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "ws-test-tenant-2",
+					},
+					Status: crt.WorkspaceStatus{
+						Namespaces: []crt.SpaceNamespace{
+							{
+								Name: "ws-test-tenant-2",
+								Type: "default",
+							},
+						},
+					},
+				},
+			}
+		})
+
+		It("Should return a WorkspaceList with test-tenant workspace and both namespaces in it", func() {
+			actualWorkspaces, err := getWorkspacesWithAccess(e, c, allNamespaces)
+			Expect(actualWorkspaces.Items).To(Equal(expectedWorkspaces))
+			Expect(err).NotTo(HaveOccurred(), "Unexpected error testing GetWorkspacesWithAccess")
+		})
+
+		AfterEach(func() {
+			for i, name := range namespaceNames {
+				deleteRoleBinding(k8sClient, name, roleBindings[i])
+				deleteRole(k8sClient, name, roleNames[i])
+				deleteNamespace(k8sClient, name)
+			}
+		})
+	})
+
+	Context("When workspace with only test-tenant namespace has all the necessary permissions", func() {
+		namespaceNames := []string{"ws-test-tenant-1", "ws-test-tenant-2"}
+		BeforeEach(func() {
+			gv = "v1alpha1"
+			for _, name := range namespaceNames {
+				ns, err := createNamespace(k8sClient, name)
+				Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error while creating the namespace %s: %v", name, err))
+				allNamespaces = append(allNamespaces, ns)
+			}			
+			createRole(k8sClient, "ws-test-tenant-1", "ws-namespace-access-1", []string{"create", "list", "watch", "delete"})
+			createRoleBinding(k8sClient, "ws-namespace-access-user-binding-1", "ws-test-tenant-1", "user1@konflux.dev", "ws-namespace-access-1")
+			expectedWorkspaces = []crt.Workspace{
+				{
+					TypeMeta: metav1.TypeMeta{
+						Kind:       "Workspace",
+						APIVersion: gv,
+					},
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "ws-test-tenant-1",
+					},
+					Status: crt.WorkspaceStatus{
+						Namespaces: []crt.SpaceNamespace{
+							{
+								Name: "ws-test-tenant-1",
+								Type: "default",
+							},
+						},
+					},
+				},
+			}
+		})
+
+		It("Should return a WorkspaceList with test-tenant workspace and only test-tenant namespace in it", func() {
+			actualWorkspaces, err := getWorkspacesWithAccess(e, c, allNamespaces)
+			Expect(actualWorkspaces.Items).To(Equal(expectedWorkspaces))
+			Expect(err).NotTo(HaveOccurred(), "Unexpected error testing GetWorkspacesWithAccess")
+		})
+
+		AfterEach(func() {
+			deleteRoleBinding(k8sClient, "ws-test-tenant-1", "ws-namespace-access-user-binding-1")
+			deleteRole(k8sClient, "ws-test-tenant-1", "ws-namespace-access-1")
+			for _, name := range namespaceNames {
+				deleteNamespace(k8sClient, name)
+			}
+		})
+	})	
+
+	Context("When no workspaces has all the necessary permissions", func() {
+		namespaceNames := []string{"ws-test-tenant-1", "ws-test-tenant-2"}
+		BeforeEach(func() {
+			gv = "v1alpha1"
+			for _, name := range namespaceNames {
+				ns, err := createNamespace(k8sClient, name)
+				Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error while creating the namespace %s: %v", name, err))
+				allNamespaces = append(allNamespaces, ns)
+			}
+			createRole(k8sClient, "ws-test-tenant-1", "ws-namespace-access-1", []string{"create", "list"})
+			createRoleBinding(k8sClient, "ws-namespace-access-user-binding-1", "ws-test-tenant-1", "user1@konflux.dev", "ws-namespace-access-1")
+			expectedWorkspaces = []crt.Workspace{}
+		})
+
+		It("Should return a empty WorkspaceList", func() {
+			actualWorkspaces, err := getWorkspacesWithAccess(e, c, allNamespaces)
+			Expect(actualWorkspaces.Items).To(Equal(expectedWorkspaces))
+			Expect(err).NotTo(HaveOccurred(), "Unexpected error testing GetWorkspacesWithAccess")
+		})
+
+		AfterEach(func() {
+			deleteRoleBinding(k8sClient, "ws-test-tenant-1", "ws-namespace-access-user-binding-1")
+			deleteRole(k8sClient, "ws-test-tenant-1", "ws-namespace-access-1")
+			for _, name := range namespaceNames {
+				deleteNamespace(k8sClient, name)
+			}
+		})
+	})
+})
