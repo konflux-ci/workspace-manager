@@ -7,30 +7,31 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/labstack/echo/v4"
 	k8sapi "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/client-go/kubernetes"
 
 	"context"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	crt "github.com/codeready-toolchain/api/api/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
-	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+
+	"github.com/konflux-ci/workspace-manager/pkg/test/utils"
+
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
 
 type HTTPResponse struct {
@@ -250,46 +251,17 @@ var _ = DescribeTable("Specific workspace endpoint", func(endpoint string, heade
 		`{"message":"Not Found"}`),
 )
 
-func CreateKubeconfigFileForRestConfig(restConfig rest.Config) string {
-	clusters := make(map[string]*clientcmdapi.Cluster)
-	clusters["default-cluster"] = &clientcmdapi.Cluster{
-		Server:                   restConfig.Host,
-		CertificateAuthorityData: restConfig.CAData,
-	}
-	contexts := make(map[string]*clientcmdapi.Context)
-	contexts["default-context"] = &clientcmdapi.Context{
-		Cluster:  "default-cluster",
-		AuthInfo: "default-user",
-	}
-	authinfos := make(map[string]*clientcmdapi.AuthInfo)
-	authinfos["default-user"] = &clientcmdapi.AuthInfo{
-		ClientCertificateData: restConfig.CertData,
-		ClientKeyData:         restConfig.KeyData,
-	}
-	clientConfig := clientcmdapi.Config{
-		Kind:           "Config",
-		APIVersion:     "v1",
-		Clusters:       clusters,
-		Contexts:       contexts,
-		CurrentContext: "default-context",
-		AuthInfos:      authinfos,
-	}
-	kubeConfigFile, _ := os.CreateTemp("", "kubeconfig")
-	_ = clientcmd.WriteToFile(clientConfig, kubeConfigFile.Name())
-	return kubeConfigFile.Name()
-}
-
 var serverProcess *exec.Cmd
+var serverCancelFunc context.CancelFunc
 
 var _ = BeforeSuite(func() {
-	testEnv = &envtest.Environment{}
-	cfg, err := testEnv.Start()
-	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error creating the envtest environment during test setup: %v", err))
-	kubeconfigPath := CreateKubeconfigFileForRestConfig(*cfg)
-	os.Setenv("KUBECONFIG", kubeconfigPath)
-	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme})
-	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error creating the client during test setup: %v", err))
-	Expect(k8sClient).NotTo(BeNil())
+	schema := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(schema))
+	testEnv = &envtest.Environment{BinaryAssetsDirectory: "../bin/k8s/1.29.0-linux-amd64/"}
+	k8sClient = utils.StartTestEnv(schema, testEnv)
+
+	serverProcess, serverCancelFunc = utils.CreateWorkspaceManagerServer("main.go", nil, "")
+	utils.WaitForWorkspaceManagerServerToServe()
 
 	user1 := "user1@konflux.dev"
 	user2 := "user2@konflux.dev"
@@ -303,18 +275,11 @@ var _ = BeforeSuite(func() {
 	createRoleBinding(k8sClient, "namespace-access-user-binding", "test-tenant", user1, "namespace-access")
 	createRoleBinding(k8sClient, "namespace-access-user-binding-2", "test-tenant", user2, "namespace-access")
 	createRoleBinding(k8sClient, "namespace-access-user-binding-3", "test-tenant-2", user2, "namespace-access-2")
-	serverProcess = exec.Command("go", "run", "main.go")
-	err = serverProcess.Start()
-	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error starting the server during test setup: %v", err))
-	time.Sleep(5 * time.Second)
 })
 
 var _ = AfterSuite(func() {
-	Expect(os.Unsetenv("KUBECONFIG")).To(Succeed())
-	if serverProcess != nil && serverProcess.Process != nil {
-		err := serverProcess.Process.Kill()
-		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Error killing the server during test teardown: %v", err))
-	}
+	utils.StopWorkspaceManagerServer(serverProcess, serverCancelFunc)
+	utils.StopEnvTest(testEnv)
 })
 
 var _ = DescribeTable("TestRunAccessCheck", func(user string, namespace string, resource string, verb string, expectedResult bool) {

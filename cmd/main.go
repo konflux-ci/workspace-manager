@@ -263,5 +263,9 @@ func main() {
 		return echo.NewHTTPError(http.StatusNotFound)
 	})
 
+	e.GET("/health", func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
+	})
+
 	e.Logger.Fatal(e.Start(":5000"))
 }
