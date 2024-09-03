@@ -45,9 +45,11 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 }
 
+type NamespaceWithAccess func(e *echo.Echo, c echo.Context, authCl authorizationv1Client.AuthorizationV1Interface, allNamespaces []core.Namespace) ([]core.Namespace, error)
+
 // Given all relevant user namespaces, return all workspaces for the calling user
 func getWorkspacesWithAccess(
-	e *echo.Echo, c echo.Context, allNamespaces []core.Namespace,
+	e *echo.Echo, c echo.Context, allNamespaces []core.Namespace, getNamespacesWithAccess NamespaceWithAccess,
 ) (crt.WorkspaceList, error) {
 	cfg, err := config.GetConfig()
 	if err != nil {
@@ -103,7 +105,7 @@ func getWorkspacesWithAccess(
 
 // Get all the namespace in which the calling user is allowed to perform enough actions
 // to allow workspace access
-func getNamespacesWithAccess(
+var getNamespacesWithAccess = func(
 	e *echo.Echo,
 	c echo.Context,
 	authCl authorizationv1Client.AuthorizationV1Interface,
@@ -232,7 +234,7 @@ func main() {
 		if err != nil {
 			e.Logger.Fatal(err)
 		}
-		workspaces, err := getWorkspacesWithAccess(e, c, userNamespaces)
+		workspaces, err := getWorkspacesWithAccess(e, c, userNamespaces, getNamespacesWithAccess)
 		if err != nil {
 			e.Logger.Fatal(err)
 		}
@@ -248,11 +250,10 @@ func main() {
 		if err != nil {
 			e.Logger.Fatal(err)
 		}
-		workspaces, err := getWorkspacesWithAccess(e, c, userNamespaces)
+		workspaces, err := getWorkspacesWithAccess(e, c, userNamespaces, getNamespacesWithAccess)
 		if err != nil {
 			e.Logger.Fatal(err)
 		}
-
 		wsParam := c.Param("ws")
 		for _, ws := range workspaces.Items {
 			if ws.Name == wsParam {
