@@ -22,20 +22,9 @@ import (
 
 	crt "github.com/codeready-toolchain/api/api/v1alpha1"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/konflux-ci/workspace-manager/pkg/api/v1alpha1"
 )
-
-type SignupStatusReason = string
-
-var SignedUp SignupStatusReason = "SignedUp"
-
-type SignupStatus struct {
-	Ready  bool               `json:"ready"`
-	Reason SignupStatusReason `json:"reason"`
-}
-
-type Signup struct {
-	SignupStatus SignupStatus `json:"status"`
-}
 
 var (
 	scheme = runtime.NewScheme()
@@ -215,10 +204,10 @@ func main() {
 	})
 
 	e.GET("/api/v1/signup", func(c echo.Context) error {
-		resp := &Signup{
-			SignupStatus: SignupStatus{
+		resp := &v1alpha1.Signup{
+			SignupStatus: v1alpha1.SignupStatus{
 				Ready:  true,
-				Reason: SignedUp,
+				Reason: v1alpha1.SignedUp,
 			},
 		}
 		return c.JSON(http.StatusOK, resp)
