@@ -23,7 +23,7 @@ import (
 	crt "github.com/codeready-toolchain/api/api/v1alpha1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/konflux-ci/workspace-manager/pkg/api/v1alpha1"
+	dummysignup "github.com/konflux-ci/workspace-manager/pkg/handlers/signup/dummy"
 )
 
 var (
@@ -199,19 +199,9 @@ func main() {
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 
-	e.POST("/api/v1/signup", func(c echo.Context) error {
-		return c.String(http.StatusOK, "ok")
-	})
+	e.POST("/api/v1/signup", dummysignup.DummySignupPostHandler)
 
-	e.GET("/api/v1/signup", func(c echo.Context) error {
-		resp := &v1alpha1.Signup{
-			SignupStatus: v1alpha1.SignupStatus{
-				Ready:  true,
-				Reason: v1alpha1.SignedUp,
-			},
-		}
-		return c.JSON(http.StatusOK, resp)
-	})
+	e.GET("/api/v1/signup", dummysignup.DummySignupGetHandler)
 
 	e.GET("/workspaces", func(c echo.Context) error {
 		nameReq, _ := labels.NewRequirement(
