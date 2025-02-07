@@ -103,7 +103,7 @@ var getNamespacesWithAccess = func(
 	var allowedNs []core.Namespace
 	for _, ns := range allNamespaces {
 		notAllowed := false
-		for _, verb := range []string{"create", "list", "watch", "delete"} {
+		for _, verb := range []string{"list", "watch"} {
 			for _, resource := range []string{"applications", "components"} {
 				allowed, err := runAccessCheck(
 					authCl,
