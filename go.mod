@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/codeready-toolchain/api v0.0.0-20240322110702-5ab3840476e9
-	github.com/labstack/echo/v4 v4.13.3
+	github.com/labstack/echo/v4 v4.13.4
 	github.com/onsi/ginkgo/v2 v2.1.4
 	github.com/onsi/gomega v1.19.0
 	k8s.io/api v0.25.0
