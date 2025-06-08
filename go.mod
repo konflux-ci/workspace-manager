@@ -3,7 +3,7 @@ module github.com/konflux-ci/workspace-manager
 go 1.20
 
 require (
-	github.com/codeready-toolchain/api v0.0.0-20240322110702-5ab3840476e9
+	github.com/codeready-toolchain/api 383ffe6cac27
 	github.com/labstack/echo/v4 v4.13.3
 	github.com/onsi/ginkgo/v2 v2.1.4
 	github.com/onsi/gomega v1.19.0
