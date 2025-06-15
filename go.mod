@@ -1,6 +1,8 @@
 module github.com/konflux-ci/workspace-manager
 
-go 1.20
+go 1.22
+
+toolchain go1.23.9
 
 require (
 	github.com/codeready-toolchain/api v0.0.0-20240322110702-5ab3840476e9
@@ -50,7 +52,7 @@ require (
 	golang.org/x/text v0.21.0 // indirect
 	golang.org/x/time v0.8.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
-	google.golang.org/protobuf v1.33.0 // indirect
+	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
