@@ -15,7 +15,7 @@ COPY pkg pkg
 # Build
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64  go build -a -o manager cmd/main.go
 
-FROM registry.access.redhat.com/ubi8/ubi-minimal:8.10-1216
+FROM registry.access.redhat.com/ubi8/ubi-minimal:8.10-1295.1749680713
 
 COPY LICENSE /licenses
 COPY --from=builder /opt/app-root/src/manager /
