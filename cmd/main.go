@@ -4,8 +4,8 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
+	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	core "k8s.io/api/core/v1"
 	authorizationv1Client "k8s.io/client-go/kubernetes/typed/authorization/v1"

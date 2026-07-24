@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/konflux-ci/workspace-manager/pkg/api/v1alpha1"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 func DummySignupPostHandler(c echo.Context) error {
